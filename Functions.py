@@ -6,9 +6,11 @@ Created on Mon Feb 16 09:28:35 2026
 """
 
 import matplotlib.pyplot as plt
+import cv2
 
-def show_img(image):
+def show_img(path):
     
+    image = cv2.read(path)    
     plt.imshow(image)
     plt.axis('off')
     plt.show()
