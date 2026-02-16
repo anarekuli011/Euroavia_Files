@@ -10,7 +10,7 @@ import cv2
 
 def show_img(path):
     
-    image = cv2.read(path)    
+    image = cv2.imread(path)    
     plt.imshow(image)
     plt.axis('off')
     plt.show()
