@@ -41,7 +41,13 @@ def parse_ids(val):
                 out.append(token)
         else:
             out.append(token)
-    return out    
+    return out   
+
+def filter_by_ids(df, ids, id_col="ID"):
+    ids = {str(x) for x in ids if str(x).strip() != ""}
+    if not ids:
+        return df.iloc[0:0].copy()
+    return df[df[id_col].astype(str).isin(ids)].copy()
 
 def build_airport_chain(df_airports, df_runways, df_lds, df_functions, df_segments, df_ccrcircuits):
     """
