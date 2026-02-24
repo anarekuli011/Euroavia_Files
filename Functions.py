@@ -272,3 +272,54 @@ def compare_chain_to_excel(
         raise AssertionError(msg)
 
     return result
+
+def format_chain_compare_result(result: dict, filename: str = "Queenstown.xlsx", sheet_name=0) -> str:
+    colrep = result.get("column_report", {})
+    missing_in_excel = colrep.get("missing_in_excel", [])
+    missing_in_chain = colrep.get("missing_in_chain", [])
+    common_cols = colrep.get("common_cols_used_for_compare", [])
+
+    n_missing_excel = len(result.get("missing_from_excel", []))
+    n_missing_chain = len(result.get("missing_from_chain", []))
+
+    if result.get("matches", False):
+        return (
+            f"Chain comparison PASSED\n"
+            f"  File: {filename} (sheet={sheet_name})\n"
+            f"  Columns compared: {len(common_cols)}\n"
+            f"  Row differences: 0"
+        )
+
+    lines = [
+        "Chain comparison FAILED",
+        f"  File: {filename} (sheet={sheet_name})",
+        f"  Missing columns in Excel: {missing_in_excel}",
+        f"  Missing columns in df_chain: {missing_in_chain}",
+        f"  Rows in df_chain but not Excel: {n_missing_excel}",
+        f"  Rows in Excel but not df_chain: {n_missing_chain}",
+    ]
+    return "\n".join(lines)
+
+
+def check_chain_against_excel(
+    df_chain: pd.DataFrame,
+    filename: str = "Queenstown.xlsx",
+    sheet_name=0,
+    raise_on_mismatch: bool = False,
+    print_report: bool = True,
+):
+    """
+    Runs the comparison and prints a clean report.
+    Returns the full result dict.
+    """
+    result = compare_chain_to_excel(
+        df_chain,
+        filename=filename,
+        sheet_name=sheet_name,
+        raise_on_mismatch=raise_on_mismatch,
+    )
+
+    if print_report:
+        print(format_chain_compare_result(result, filename=filename, sheet_name=sheet_name))
+
+    return result
