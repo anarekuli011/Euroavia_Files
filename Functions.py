@@ -180,19 +180,27 @@ def normalize_chain_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out.columns = out.columns.astype(str).str.strip()
 
-    # Normalize ID-like cols
     id_cols = [c for c in out.columns if c.endswith("ID") or c in ("CCR_ID",)]
     for c in id_cols:
         if c in out.columns:
             out[c] = _norm_id_series(out[c])
 
-    # Normalize some name-like cols
     name_cols = [c for c in out.columns if c.lower() in {
         "airport","runway","ld","function","segment","circuit","ccr_name"
     }]
     for c in name_cols:
         if c in out.columns:
             out[c] = out[c].astype("string").str.strip()
+
+    # --- add this block ---
+    if "LD" in out.columns:
+        out["LD"] = _norm_id_series(out["LD"])  # turns 5.0 -> "5"
+        # runway designators are typically 2 digits: "5" -> "05"
+        out["LD"] = out["LD"].where(
+            ~out["LD"].str.fullmatch(r"\d+"),
+            out["LD"].str.zfill(2)
+        )
+    # ----------------------
 
     return out
 
