@@ -4,10 +4,10 @@ Created on Mon Feb 16 09:28:35 2026
 
 @author: aprash
 """
-
 import matplotlib.pyplot as plt
 import cv2
 import pandas as pd
+from pathlib import Path
 
 def show_img(path, x=20, y=12):
     image = cv2.imread(path)
@@ -164,211 +164,103 @@ def build_airport_chain(df_airports, df_runways, df_lds, df_functions, df_segmen
 
     return pd.DataFrame(chain)
 
+def _module_dir() -> Path:
+    # folder that contains this function.py file
+    return Path(__file__).resolve().parent
 
 
-from __future__ import annotations
+def _norm_id_series(s: pd.Series) -> pd.Series:
+    s = s.astype("string")
+    s = s.str.strip()
+    s = s.str.replace(r"\.0$", "", regex=True)  # Excel sometimes makes IDs "123.0"
+    s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+    return s
 
-
-# -----------------------------
-# Reference implementations
-# -----------------------------
-
-def _ref_get_lds_for_runways(df_lds, df_runways_for_airport):
-    ld_ids = set()
-    for _, rwy in df_runways_for_airport.iterrows():
-        for key in ("LD1ID", "LD2ID"):
-            ld_ids.update(parse_ids(rwy.get(key)))
-
-    df_lds_for_airport = filter_by_ids(df_lds, ld_ids)
-    return ld_ids, df_lds_for_airport
-
-
-def _ref_get_function_ids_from_lds(df_lds_for_airport):
-    ld_function_ids = set()
-    for _, ld in df_lds_for_airport.iterrows():
-        for key in ("LandFunctionIDs", "TakeOffFunctionIDs"):
-            ld_function_ids.update(parse_ids(ld.get(key)))
-    return ld_function_ids
-
-
-def _ref_get_function_ids_from_runways(df_runways_for_airport):
-    runway_function_ids = set()
-    for _, rwy in df_runways_for_airport.iterrows():
-        runway_function_ids.update(parse_ids(rwy.get("FunctionIDs")))
-    return runway_function_ids
-
-
-def _ref_get_functions_for_airport(df_functions, ld_function_ids, runway_function_ids):
-    runway_direct_only = set(runway_function_ids) - set(ld_function_ids)
-    function_ids = set(ld_function_ids) | runway_direct_only
-    df_functions_for_airport = filter_by_ids(df_functions, function_ids)
-    return function_ids, runway_direct_only, df_functions_for_airport
-
-
-def _ref_get_segments_for_functions(df_segments, df_functions_for_airport):
-    segment_ids = set()
-    for _, fn in df_functions_for_airport.iterrows():
-        segment_ids.update(parse_ids(fn.get("SegmentIDs")))
-
-    df_segments_for_airport = filter_by_ids(df_segments, segment_ids)
-    return segment_ids, df_segments_for_airport
-
-
-def _ref_get_circuit_ids_for_segments(df_segments_for_airport):
-    circuit_ids = set()
-    for _, seg in df_segments_for_airport.iterrows():
-        circuit_ids.update(parse_ids(seg.get("CCRCircuitIDs")))
-    return circuit_ids
-
-
-# -----------------------------
-# Comparison helpers
-# -----------------------------
-
-def _sorted_ids(x):
-    return sorted(map(str, set(x)))
-
-
-def _assert_set_equal(got, exp, label: str):
-    got, exp = set(got), set(exp)
-    if got != exp:
-        missing = exp - got
-        extra = got - exp
-        raise AssertionError(
-            f"{label}: set mismatch\n"
-            f"  missing: {_sorted_ids(missing)}\n"
-            f"  extra:   {_sorted_ids(extra)}"
-        )
-
-
-def _normalize_df(df: pd.DataFrame, id_col: str = "ID") -> pd.DataFrame:
-    if df is None:
-        return df
+def normalize_chain_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    if id_col in out.columns:
-        out[id_col] = out[id_col].astype(str)
-        out = out.sort_values(id_col)
-    return out.reset_index(drop=True)
+    out.columns = out.columns.astype(str).str.strip()
 
+    # Normalize ID-like cols
+    id_cols = [c for c in out.columns if c.endswith("ID") or c in ("CCR_ID",)]
+    for c in id_cols:
+        if c in out.columns:
+            out[c] = _norm_id_series(out[c])
 
-def _assert_df_equal(got: pd.DataFrame, exp: pd.DataFrame, label: str, id_col: str = "ID"):
-    got_n = _normalize_df(got, id_col=id_col)
-    exp_n = _normalize_df(exp, id_col=id_col)
-    try:
-        pd.testing.assert_frame_equal(
-            got_n, exp_n,
-            check_dtype=False,   # tolerate dtype differences (common with CSVs)
-            check_like=True      # tolerate column order differences
-        )
-    except AssertionError as e:
-        raise AssertionError(f"{label}: dataframe mismatch\n{e}") from None
+    # Normalize some name-like cols
+    name_cols = [c for c in out.columns if c.lower() in {
+        "airport","runway","ld","function","segment","circuit","ccr_name"
+    }]
+    for c in name_cols:
+        if c in out.columns:
+            out[c] = out[c].astype("string").str.strip()
 
+    return out
 
-# -----------------------------
-# Main checker (pipeline)
-# -----------------------------
+def read_expected_chain_excel(
+    filename: str = "Queenstown.xlsx",
+    sheet_name=0
+) -> pd.DataFrame:
+    path = _module_dir() / filename
+    return pd.read_excel(path, sheet_name=sheet_name)
 
-def check_airport_pipeline(
-    student_ns: dict,
-    df_airports,
-    df_runways,
-    df_lds,
-    df_functions,
-    df_segments,
-    airport_id="1",
-    collect_all_errors: bool = False,
+def compare_chain_to_excel(
+    df_chain: pd.DataFrame,
+    filename: str = "Queenstown.xlsx",
+    sheet_name=0,
+    raise_on_mismatch: bool = True
 ):
     """
-    student_ns: pass globals() from the notebook so we can access student functions by name.
+    Compares df_chain to an Excel file located in the SAME folder as function.py.
 
-    Raises AssertionError with a helpful message, or (if collect_all_errors=True)
-    returns a list of error strings.
+    Returns dict with:
+      matches (bool),
+      missing_from_excel (DataFrame),
+      missing_from_chain (DataFrame),
+      column_report (dict)
     """
-    errors = []
+    df_xlsx = read_expected_chain_excel(filename=filename, sheet_name=sheet_name)
 
-    def _run_check(fn_label, check_callable):
-        nonlocal errors
-        try:
-            check_callable()
-        except Exception as e:
-            if collect_all_errors:
-                errors.append(f"{fn_label}: {e}")
-            else:
-                raise
+    c = normalize_chain_df(df_chain)
+    x = normalize_chain_df(df_xlsx)
 
-    # Use your provided function to build the common starting point
-    airport, runway_ids, df_runways_for_airport = get_airport_and_runways(
-        df_airports, df_runways, airport_id=airport_id
-    )
+    missing_in_xlsx = sorted(set(c.columns) - set(x.columns))
+    missing_in_chain = sorted(set(x.columns) - set(c.columns))
+    common_cols = [col for col in c.columns if col in x.columns]
 
-    # --- get_lds_for_runways ---
-    def _check_lds():
-        exp_ld_ids, exp_df_lds = _ref_get_lds_for_runways(df_lds, df_runways_for_airport)
-        got_ld_ids, got_df_lds = student_ns["get_lds_for_runways"](df_lds, df_runways_for_airport)
-        _assert_set_equal(got_ld_ids, exp_ld_ids, "get_lds_for_runways -> ld_ids")
-        _assert_df_equal(got_df_lds, exp_df_lds, "get_lds_for_runways -> df_lds_for_airport")
+    c2 = c[common_cols].copy()
+    x2 = x[common_cols].copy()
 
-    _run_check("get_lds_for_runways", _check_lds)
+    # Compare as unordered sets of rows (by sorting on all common columns)
+    c2s = c2.sort_values(common_cols, na_position="first").reset_index(drop=True)
+    x2s = x2.sort_values(common_cols, na_position="first").reset_index(drop=True)
 
-    # If previous step failed and we're collecting errors, we may not have valid got_* objects.
-    # So compute expected intermediates for the remaining checks from reference:
-    exp_ld_ids, exp_df_lds = _ref_get_lds_for_runways(df_lds, df_runways_for_airport)
+    # Find row-level differences
+    m = c2.merge(x2, how="outer", indicator=True)
+    missing_from_excel = m[m["_merge"] == "left_only"].drop(columns="_merge")
+    missing_from_chain = m[m["_merge"] == "right_only"].drop(columns="_merge")
 
-    # --- get_function_ids_from_lds ---
-    def _check_fn_ids_from_lds():
-        exp = _ref_get_function_ids_from_lds(exp_df_lds)
-        got = student_ns["get_function_ids_from_lds"](exp_df_lds)
-        _assert_set_equal(got, exp, "get_function_ids_from_lds -> ld_function_ids")
+    matches = (len(missing_from_excel) == 0 and len(missing_from_chain) == 0
+               and not missing_in_xlsx and not missing_in_chain)
 
-    _run_check("get_function_ids_from_lds", _check_fn_ids_from_lds)
+    result = {
+        "matches": matches,
+        "missing_from_excel": missing_from_excel,
+        "missing_from_chain": missing_from_chain,
+        "column_report": {
+            "missing_in_excel": missing_in_xlsx,
+            "missing_in_chain": missing_in_chain,
+            "common_cols_used_for_compare": common_cols,
+        }
+    }
 
-    # --- get_function_ids_from_runways ---
-    def _check_fn_ids_from_runways():
-        exp = _ref_get_function_ids_from_runways(df_runways_for_airport)
-        got = student_ns["get_function_ids_from_runways"](df_runways_for_airport)
-        _assert_set_equal(got, exp, "get_function_ids_from_runways -> runway_function_ids")
-
-    _run_check("get_function_ids_from_runways", _check_fn_ids_from_runways)
-
-    exp_ld_function_ids = _ref_get_function_ids_from_lds(exp_df_lds)
-    exp_runway_function_ids = _ref_get_function_ids_from_runways(df_runways_for_airport)
-
-    # --- get_functions_for_airport ---
-    def _check_functions_for_airport():
-        exp_function_ids, exp_runway_direct_only, exp_df_functions = _ref_get_functions_for_airport(
-            df_functions, exp_ld_function_ids, exp_runway_function_ids
+    if raise_on_mismatch and not matches:
+        msg = (
+            f"df_chain does NOT match {filename}\n"
+            f"Missing columns in Excel: {missing_in_xlsx}\n"
+            f"Missing columns in chain: {missing_in_chain}\n"
+            f"Rows in chain but not Excel: {len(missing_from_excel)}\n"
+            f"Rows in Excel but not chain: {len(missing_from_chain)}\n"
         )
-        got_function_ids, got_runway_direct_only, got_df_functions = student_ns["get_functions_for_airport"](
-            df_functions, exp_ld_function_ids, exp_runway_function_ids
-        )
-        _assert_set_equal(got_function_ids, exp_function_ids, "get_functions_for_airport -> function_ids")
-        _assert_set_equal(got_runway_direct_only, exp_runway_direct_only, "get_functions_for_airport -> runway_direct_only")
-        _assert_df_equal(got_df_functions, exp_df_functions, "get_functions_for_airport -> df_functions_for_airport")
+        raise AssertionError(msg)
 
-    _run_check("get_functions_for_airport", _check_functions_for_airport)
-
-    exp_function_ids, exp_runway_direct_only, exp_df_functions = _ref_get_functions_for_airport(
-        df_functions, exp_ld_function_ids, exp_runway_function_ids
-    )
-
-    # --- get_segments_for_functions ---
-    def _check_segments_for_functions():
-        exp_segment_ids, exp_df_segments = _ref_get_segments_for_functions(df_segments, exp_df_functions)
-        got_segment_ids, got_df_segments = student_ns["get_segments_for_functions"](df_segments, exp_df_functions)
-        _assert_set_equal(got_segment_ids, exp_segment_ids, "get_segments_for_functions -> segment_ids")
-        _assert_df_equal(got_df_segments, exp_df_segments, "get_segments_for_functions -> df_segments_for_airport")
-
-    _run_check("get_segments_for_functions", _check_segments_for_functions)
-
-    exp_segment_ids, exp_df_segments = _ref_get_segments_for_functions(df_segments, exp_df_functions)
-
-    # --- get_circuit_ids_for_segments ---
-    def _check_circuit_ids():
-        exp_circuit_ids = _ref_get_circuit_ids_for_segments(exp_df_segments)
-        got_circuit_ids = student_ns["get_circuit_ids_for_segments"](exp_df_segments)
-        _assert_set_equal(got_circuit_ids, exp_circuit_ids, "get_circuit_ids_for_segments -> circuit_ids")
-
-    _run_check("get_circuit_ids_for_segments", _check_circuit_ids)
-
-    return errors if collect_all_errors else True
-
+    return result
